@@ -21,19 +21,49 @@ def get_vocabulary():
                 vocabulary[line[:fi]] = vector
     return vocabulary
 
-
+#
 def get_train_input(vocabulary):
-    train_input = []
+    max_len = 0
     with open('yelp-2013/yelp-2013-seg-20-20.train.ss', encoding='UTF-8') as f:
+        # 第一次遍历先得到最长句子长度
         for (idx, line) in enumerate(f):
             user_id, product_id, score, comment_str = line.split('\t\t')
+            comment_str = comment_str.split(' ')
+            len_count = 0
+            for i in comment_str:
+                if i == '<sssss>':
+                    continue
+                filter_list = '.\n0123456789!,.'
+                flag = False
+                for j in filter_list:
+                    if j in i:
+                        flag = True
+                if flag:
+                    continue
+                len_count += 1
+                
+            if len_count > max_len:
+                max_len = len_count
+        #print(max_len)  
+            
+    with open('yelp-2013/yelp-2013-seg-20-20.train.ss', encoding='UTF-8') as f:
+        train_input = []
+        to_fill = []
+        for i in range(200):
+            to_fill.append(float(0))
+        # output = open("word_matrix.txt", "w")
+        for (idx, line) in enumerate(f):
+            user_id, product_id, score, comment_str = line.split('\t\t')
+            
             score = int(score)
             comment = []
             comment_str = comment_str.split(' ')
             for i in comment_str:
-                try:
+                if i == '<sssss>':
+                    continue
+                if vocabulary.__contains__(i):
                     comment.append(vocabulary[i])
-                except Exception:
-                    pass
+            for i in range(max_len - len(comment)):
+                comment.append(to_fill)
             train_input.append((user_id, product_id, score, comment))
     return train_input
