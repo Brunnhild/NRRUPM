@@ -1,6 +1,6 @@
 from data import get_train_input, get_vocabulary
-from keras.models import Sequential
-from keras.layers import Dense, LSTM, Bidirectional, Conv1D, Dropout, GlobalMaxPool1D
+from keras.models import Model
+from keras.layers import Dense, LSTM, Bidirectional, Conv1D, Dropout, GlobalMaxPool1D, Input, concatenate
 from keras.utils import np_utils
 import numpy as np
 
@@ -29,15 +29,22 @@ if __name__ == '__main__':
     # model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
     # model.fit(X, y, epochs=500, batch_size=30, verbose=2)
 
-    model = Sequential()
-    model.add(Conv1D(5, 3, padding='valid', activation='relu', strides=1))
-    model.add(Dropout(0.5))
-    model.add(GlobalMaxPool1D())
-    model.add(Dense(100, activation='relu'))
+    text_input = Input(shape=(1034, 200))
 
-    model.add(Dense(20, activation='relu'))
-    model.add(Dropout(0.5))
-    model.add(Dense(6, activation='softmax'))
+    lstm_1 = LSTM(32)(text_input)
+    lstm_2 = Dense(6)(lstm_1)
 
+    cnn_1 = Conv1D(5, 3, padding='valid', activation='relu', strides=1)(text_input)
+    cnn_2 = Dropout(0.5)(cnn_1)
+    cnn_3 = GlobalMaxPool1D()(cnn_2)
+    cnn_4 = Dense(100, activation='relu')(cnn_3)
+    cnn_5 = Dense(20, activation='relu')(cnn_4)
+    cnn_6 = Dropout(0.5)(cnn_5)
+    cnn_7 = Dense(6)(cnn_6)
+
+    combine = concatenate([lstm_2, cnn_7], axis=-1)
+    output = Dense(6, activation='softmax')(combine)
+
+    model = Model(text_input, output)
     model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
     model.fit(X, y, epochs=500, batch_size=30, verbose=2)
