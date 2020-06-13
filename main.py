@@ -1,14 +1,11 @@
 from data import get_train_input, get_vocabulary
 from keras.models import Sequential
-from keras.layers import Dense
-from keras.layers import LSTM
+from keras.layers import Dense, LSTM, Bidirectional, Conv1D, Dropout, GlobalMaxPool1D
 from keras.utils import np_utils
 import numpy as np
 
 
 if __name__ == '__main__':
-    a = [[[1, 1], [1, 1]], [[1, 1], [1, 1]]]
-    a = np.array(a)
 
     train_input = get_train_input(get_vocabulary())[:1000]
     # print(get_train_input(get_vocabulary()))
@@ -26,8 +23,21 @@ if __name__ == '__main__':
     X = np.reshape(X, (X.shape[0], len(X[0]), 200))
     y = np.array(y)
     y = np_utils.to_categorical(y)
+    # model = Sequential()
+    # model.add(Bidirectional(LSTM(32, input_shape=(1034, 200))))
+    # model.add(Dense(6, activation='softmax'))
+    # model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+    # model.fit(X, y, epochs=500, batch_size=30, verbose=2)
+
     model = Sequential()
-    model.add(LSTM(32, input_shape=(1034, 200)))
+    model.add(Conv1D(5, 3, padding='valid', activation='relu', strides=1))
+    model.add(Dropout(0.5))
+    model.add(GlobalMaxPool1D())
+    model.add(Dense(100, activation='relu'))
+
+    model.add(Dense(20, activation='relu'))
+    model.add(Dropout(0.5))
     model.add(Dense(6, activation='softmax'))
+
     model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
     model.fit(X, y, epochs=500, batch_size=30, verbose=2)
