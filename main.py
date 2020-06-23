@@ -75,15 +75,18 @@ class SentenceToDocument(Layer):
 
     def call(self, inputs):
         sentence_output, user_vec = inputs
-        sentences = []
-        for i in range(self.sentence_number):
-            sentences.append(sentences[i:i+inputs.shape[0]/self.sentence_number])
-        sum_e, e = 0, [self.get_e(i, user_vec) for i in sentences]
-        sum_e += sum([tf.exp(i) for i in e])
-        alpha = [tf.exp(i) / sum_e for i in e]
-        s = [v * alpha[idx] for idx, v in sentences]
+        section_size = inputs.shape[0] / self.sentence_number
+        sentences = [sentence_output[i*section_size:(i+1)*section_size] for i in range(self.sentence_number)]
+        ss = [self.get_s(i, user_vec) for i in sentences]
 
-        return s
+        return tf.reshape(ss, (-1))
+
+    def get_s(self, b, u):
+        e = [self.get_e(i, u) for i in b]
+        sum_e = sum([tf.exp(i) for i in e])
+        alpha = [tf.exp(i) / sum_e for i in e]
+        s = [v * alpha[idx] for idx, v in b]
+        return tf.reshape(s, (-1))
 
     def get_e(self, h, u):
         h = tf.reshape(h, (-1, 1))
@@ -92,18 +95,57 @@ class SentenceToDocument(Layer):
         tan = tf.tanh(wh + wu + self.bw)
         return tf.matmul(tf.transpose(self.vw), tan)
 
-
+'''
+Input: 1) Output of document encoder (-1, max_sentence, 2 * MIDDLE_OUTPUT)
+       2) The concatenated user vector width dimension (2 * USER_VEC_DIM, 1)
+Output: Dimension (sentence_number, 2 * MIDDLE_OUTPUT)
+'''
 class DocumentToOutput(Layer):
 
-    def __init__(self, units=DOCUMENT_MEM_DIM):
+    def __init__(self, sentence_number, units=DOCUMENT_MEM_DIM):
         super(DocumentToOutput).__init__()
+        self.sentence_number = sentence_number
         self.units = units
 
     def build(self, input_shape):
-        pass
+        self.vs = self.add_weight(
+            shape=(self.units, 1),
+            initializer="random_normal",
+            trainable=True
+        )
+        self.wh = self.add_weight(
+            shape=(self.units, input_shape[0][-1]),
+            initializer="random_normal",
+            trainable=True
+        )
+        self.wu = self.add_weight(
+            shape=(self.units, 2 * USER_VEC_DIM),
+            initializer="random_normal",
+            trainable=True
+        )
+        self.bs = self.add_weight(
+            shape=(self.units, 1),
+            initializer="random_normal",
+            trainable=True
+        )
 
     def call(self, inputs):
-        pass
+        document_output, user_vec = inputs
+        section_size = inputs.shape[0]
+        documents = [document_output[i*section_size:(i+1)*section_size] for i in range(self.sentence_number)]
+        e = [self.get_e(i, user_vec) for i in documents]
+        sum_e = sum([tf.exp(i) for i in e])
+        beta = [tf.exp(i) / sum_e for i in e]
+        s = [v * beta[idx] for idx, v in documents]
+
+        return s
+
+    def get_e(self, h, u):
+        h = tf.reshape(h, (-1, 1))
+        wh = tf.matmul(self.wh, h)
+        wu = tf.matmul(self.wu, u)
+        tan = tf.tanh(wh + wu + self.bs)
+        return tf.matmul(tf.transpose(self.vs), tan)
 
 
 if __name__ == '__main__':
