@@ -40,105 +40,54 @@ def get_sentence(stop_words, vocabulary):
     file = open(file_path, encoding = "utf-8")
 
     #得到最长的句子
-    max_len = 0
+    max_word = 0
+    max_sentence = 0
     lengest_str = ""
     for i, line in enumerate(file):
         user_id, product_id, score, comment_str = line.split('\t\t')
         comment_sentences = comment_str.split('<sssss>')
+        max_sentence = max(max_sentence, len(comment_sentences))
         for sentence in comment_sentences:
             #print(sentence)
-            temp_len = 0
-            sentence_words = sentence.split(' ')
-            for word in sentence_words:
-                if filtering(word, stop_words):
-                    continue
-                temp_len += 1
-            if temp_len > max_len:
-                max_len = temp_len
-                lengest_str = sentence
-    print(max_len)
+            sentence = filter(lambda e: not filtering(e, stop_words), sentence.split(' '))
+            max_word = max(max_word, len(list(sentence)))
+    print('The longest sentence is %d' % (max_word))
+    print('The longest document is %d' % (max_sentence))
+
+    # 将每句话都构造成词向量矩阵
+    training_X = []
+    training_Y = []
+    training_user_id = []
+    training_product_id = []
+    filling_word = [float(0) for i in range(wordVec_dim)]
+    filling_sentence = [filling_word for i in range(max_word)]
 
     file = open(file_path, encoding = "utf-8")
-    # 将每句话都构造成词向量矩阵
-    train_input = []
-    to_fill = []
-    for i in range(wordVec_dim):
-        to_fill.append(float(0))
-            
+
     for i, line in enumerate(file):
         user_id, product_id, score, comment_str = line.split('\t\t')
+        training_user_id.append(user_id)
+        training_product_id.append(product_id)
+        training_Y.append(int(score))
         comment_sentences = comment_str.split('<sssss>')
         for sentence in comment_sentences:
             sentence_matrix = []
-            sentence_words = sentence.split(' ')
-            for word in sentence_words:
-                if filtering(word, stop_words):
-                    continue
+            sentence_words = filter(lambda e: not filtering(e, stop_words), sentence.split(' '))
+            for word in list(sentence_words):
                 if vocabulary.__contains__(word):
                     sentence_matrix.append(vocabulary[word])
-            for i in range(max_len - len(sentence_matrix)):
-                sentence_matrix.append(to_fill)
-            train_input.append((user_id, product_id, score, sentence_matrix))
-    return train_input
-            
-#
-def get_train_input(vocabulary): #
+            for i in range(max_word - len(sentence_matrix)):
+                sentence_matrix.append(filling_word)
+            training_X.append(sentence_matrix)
+        for i in range(max_sentence - len(comment_sentences)):
+            training_X.append(filling_sentence)
+    return training_X, training_Y, training_user_id, training_product_id, max_word, max_sentence
+
+
+def get_train_input(vocabulary):
     #获取停用词
     stop_path = "./stop_words.txt"
     stop_file = open(stop_path, encoding = "utf-8")
-    stop_words = []
-    for i, word in enumerate(stop_file):
-        stop_words.append(word)
-    train_input = get_sentence(stop_words, vocabulary)
-    '''    
-    max_len = 0    
-    with open('yelp-2013/yelp-2013-seg-20-20.train.ss', encoding='UTF-8') as f:
-        # 第一次遍历先得到最长句子长度
-        for (idx, line) in enumerate(f):
-            user_id, product_id, score, comment_str = line.split('\t\t')
-            comment_str = comment_str.split(' ')
-            len_count = 0
-            for i in comment_str:
-                if i == '<sssss>': #去掉句子结尾符
-                    continue
-                filter_list = '.\n0123456789!,.' #去掉特殊符号
-                flag = False
-                for j in filter_list:
-                    if j in i:
-                        flag = True
-                if flag:
-                    continue
-                
-                if i in stop_words:
-                    print(i)
-                    continue
-                
-                len_count += 1
-                
-            if len_count > max_len:
-                max_len = len_count
-        print(max_len)  
-            
-    with open('yelp-2013/yelp-2013-seg-20-20.train.ss', encoding='UTF-8') as f:
-        train_input = []
-        to_fill = []
-        for i in range(200):
-            to_fill.append(float(0))
-        # output = open("word_matrix.txt", "w")
-        for (idx, line) in enumerate(f):
-            user_id, product_id, score, comment_str = line.split('\t\t')
-            
-            score = int(score)
-            comment = []
-            comment_str = comment_str.split(' ')
-            for i in comment_str:
-                if i == '<sssss>':
-                    continue
-                if vocabulary.__contains__(i):
-                    comment.append(vocabulary[i])
-            for i in range(max_len - len(comment)):
-                comment.append(to_fill)
-            train_input.append((user_id, product_id, score, comment))
-    '''
-    return train_input
-    
+    stop_words = [e for e in enumerate(stop_file)]
+    training_X, training_Y, training_user_id, training_product_id, max_word, max_sentence = get_sentence(stop_words, vocabulary)
+    return training_X, training_Y, training_user_id, training_product_id, max_word, max_sentence
