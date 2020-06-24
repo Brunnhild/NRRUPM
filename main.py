@@ -81,16 +81,16 @@ class ItemVectorTransform(Layer):
         )
 
     def call(self, inputs):
-        # u = tf.reshape(inputs, (-1, 1))
-        u = inputs
-        sum_r = sum([tf.exp(dot_product(self.user_memory_vec[i], u)) for i in range(self.user_memory_vec.shape[0])])
-        r = [tf.exp(dot_product(self.user_memory_vec[i], u)) for i in range(self.user_memory_vec.shape[0])]
-        u_ = sum([r[i] * self.user_memory_vec[i] for i in range(self.user_memory_vec.shape[0])])
-        return tf.stack([u, tf.transpose(u_)])
+        res = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
+        for u in inputs:
+            sum_r = sum([tf.exp(dot_product(self.user_memory_vec[i], u)) for i in range(self.user_memory_vec.shape[0])])
+            r = [tf.exp(dot_product(self.user_memory_vec[i], u)) for i in range(self.user_memory_vec.shape[0])]
+            u_ = sum([r[i] * self.user_memory_vec[i] for i in range(self.user_memory_vec.shape[0])])
+            res.write(res.size(), tf.concat([u, tf.transpose(u_)], axis=-1))
+        return res.stack()
 
     def compute_output_shape(self, input_shape):
-        print(input_shape)
-        return (None, 2 * USER_VEC_DIM)
+        return (None, 2 * input_shape[-1])
 
 
 '''
@@ -112,7 +112,7 @@ class SentenceToDocument(Layer):
             trainable=True
         )
         self.wh = self.add_weight(
-            shape=(self.units, input_shape[0][-1]),
+            shape=(self.units, 2 * MIDDLE_OUTPUT),
             initializer="random_normal",
             trainable=True
         )
@@ -127,24 +127,42 @@ class SentenceToDocument(Layer):
             trainable=True
         )
 
+    @tf.function
     def call(self, inputs):
-        sentence_output, user_vec = inputs
-        section_size = inputs.shape[0] / self.sentence_number
-        sentences = [sentence_output[i*section_size:(i+1)*section_size] for i in range(self.sentence_number)]
-        ss = [self.get_s(i, user_vec) for i in sentences]
+        res = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
+        print(inputs[0])
+        for idx, v in inputs[0]:
+        # for i in range(inputs[0].shape[0]):
+            sentence_output = v
+            user_vec = inputs[1][idx]
+            section_size = inputs[0].shape[1] // self.sentence_number
+            sentences = [sentence_output[i*section_size:(i+1)*section_size] for i in range(self.sentence_number)]
+            res_per_sen = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
+            for sentence in sentences:
+                res_per_sen.write(res_per_sen.size(), self.get_s(sentence, user_vec))
+            res.write(res.size(), res_per_sen)
+        return res.stack()
 
-        return tf.reshape(ss, (self.sentence_number, -1))
+    # def get_s(self, b, u):
+    #     e = [self.get_e(i, u) for i in b]
+    #     sum_e = sum([tf.exp(i) for i in e])
+    #     alpha = [tf.exp(i) / sum_e for i in e]
+    #     s = [v * alpha[idx] for idx, v in b]
+    #     return tf.reshape(s, (-1))
 
-    def get_s(self, b, u):
-        e = [self.get_e(i, u) for i in b]
+    def get_s(self, sentence, u):
+        e = [self.get_e(word, u) for word in sentence]
         sum_e = sum([tf.exp(i) for i in e])
         alpha = [tf.exp(i) / sum_e for i in e]
-        s = [v * alpha[idx] for idx, v in b]
-        return tf.reshape(s, (-1))
+        s = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
+        for i in sentence.shape[0]:
+            s.write(s.size(), alpha[i] * sentence[i])
+        return s.stack()
 
-    def get_e(self, h, u):
-        h = tf.reshape(h, (-1, 1))
-        wh = tf.matmul(self.wh, h)
+    def get_e(self, word, u):
+        word = tf.reshape(word, (-1, 1))
+        u = tf.reshape(u, (-1, 1))
+        wh = tf.matmul(self.wh, word)
         wu = tf.matmul(self.wu, u)
         tan = tf.tanh(wh + wu + self.bw)
         return tf.matmul(tf.transpose(self.vw), tan)
@@ -259,14 +277,14 @@ if __name__ == '__main__':
     # The sentence encoder
     text_inputs = Input(shape=(max_word * max_sentence, WORD_DIM))
     mask_input = Masking(0)(text_inputs)
-    lstm_1 = Bidirectional(LSTM(MIDDLE_OUTPUT, return_sequences=True))(mask_input)
+    lstm_1 = Bidirectional(LSTM(MIDDLE_OUTPUT // 2, return_sequences=True))(mask_input)
 
     cnn_input = Reshape((max_word * max_sentence, WORD_DIM, 1))(mask_input)
     cnn_1 = Conv2D(1, (5, 3), padding='same', activation='relu', strides=1)(cnn_input)
     cnn_2 = Dropout(0.5)(cnn_1)
     cnn_3 = MaxPooling2D(pool_size=(1, 4))(cnn_2)
     cnn_4 = Reshape((max_word * max_sentence, WORD_DIM // 4))(cnn_3)
-    
+
     c1 = concatenate([lstm_1, cnn_4], axis=2)
 
     # The input and transformation of the user vectors and the product vectors
@@ -277,8 +295,8 @@ if __name__ == '__main__':
 
     # The output of the whole first layer of both sides
     # The dimension now is (-1, sentence_number, 2 * MIDDLE_OUTPUT)
-    user_sentence_output = SentenceToDocument()([c1, con_user_vec])
-    pro_sentence_output = SentenceToDocument()([c1, con_pro_vec])
+    user_sentence_output = SentenceToDocument(max_sentence)([c1, con_user_vec])
+    pro_sentence_output = SentenceToDocument(max_sentence)([c1, con_pro_vec])
 
     # The document encoder
     lstm_user_1 = Bidirectional(LSTM(DOCUMENT_ENCODER_OUTPUT, return_sequences=True))(user_sentence_output)
