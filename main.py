@@ -12,8 +12,8 @@ import tensorflow as tf
 WORD_DIM = 200
 MIDDLE_OUTPUT = 50
 DOCUMENT_ENCODER_OUTPUT = 25
-USER_VEC_DIM = 100
-PROD_VEC_DIM = 100
+USER_VEC_DIM = 50
+PROD_VEC_DIM = 50
 SENTENCE_MEM_DIM = 50
 DOCUMENT_MEM_DIM = 50
 REPRESENTATIVES = 10
@@ -45,7 +45,6 @@ class ItemVectorTransform(Layer):
             u = u_batch[i]
             g = []
             weighted_u = []
-            print(self.user_memory_vec)
             for i in self.user_memory_vec.shape[0]:
                 m = self.user_memory_vec[i]
                 wu = tf.matmul(self.wu, u)
@@ -100,8 +99,8 @@ Output: Dimension (sentence_number, 2 * MIDDLE_OUTPUT)
 '''
 class SentenceToDocument(Layer):
 
-    def __init__(self, sentence_number, units=SENTENCE_MEM_DIM):
-        super(SentenceToDocument, self).__init__()
+    def __init__(self, sentence_number, units=SENTENCE_MEM_DIM, **kwargs):
+        super(SentenceToDocument, self).__init__(**kwargs)
         self.sentence_number = sentence_number
         self.units = units
 
@@ -127,45 +126,63 @@ class SentenceToDocument(Layer):
             trainable=True
         )
 
-    @tf.function
     def call(self, inputs):
         res = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
-        print(inputs[0])
+        sentence_batch, user_vec_batch = inputs
+
+        wh_batch = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
+        for sentence in sentence_batch:
+            wh = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
+            for word in sentence:
+                wh.write(wh.size(), tf.matmul(self.wh, tf.reshape(word, (-1, 1))))
+            wh_batch.write(wh_batch.size(), wh.stack())
+        wh_batch = wh_batch.stack()
+
+        u_batch = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
+        for user_vec in user_vec_batch:
+            wu = tf.matmul(self.wu, tf.reshape(user_vec, (-1, 1))) + self.bw
+            u_batch.write(u_batch.size(), wu)
+        u_batch = u_batch.stack()
+
+        u_batch = tf.expand_dims(u_batch, 1)
+        u_batch = tf.tile(u_batch, (1, wh_batch.shape[1], 1))
+
+        tan_batch = tf.tanh(u_batch + wh_batch)
+        e_batch = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
+        for tan in tan_batch:
+            e_batch.write(e_batch.size(), tf.matmul(tan, self.vw))
+        e_batch = e_batch.stack()
+        
+        alpha_batch = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
+        
+
+        for a, b in zip(sentence_batch, user_vec_batch):
+            print(a)
+            print(b)
         for idx, v in inputs[0]:
-        # for i in range(inputs[0].shape[0]):
             sentence_output = v
             user_vec = inputs[1][idx]
             section_size = inputs[0].shape[1] // self.sentence_number
             sentences = [sentence_output[i*section_size:(i+1)*section_size] for i in range(self.sentence_number)]
             res_per_sen = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
             for sentence in sentences:
-                res_per_sen.write(res_per_sen.size(), self.get_s(sentence, user_vec))
+                e = []
+                u = user_vec
+                for word in sentence:
+                    word = tf.reshape(word, (-1, 1))
+                    u = tf.reshape(u, (-1, 1))
+                    wh = tf.matmul(self.wh, word)
+                    wu = tf.matmul(self.wu, u)
+                    tan = tf.tanh(wh + wu + self.bw)
+                    e.append(tf.matmul(tf.transpose(self.vw), tan))
+                sum_e = sum([tf.exp(i) for i in e])
+                alpha = [tf.exp(i) / sum_e for i in e]
+                s = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
+                for i in sentence.shape[0]:
+                    s.write(s.size(), alpha[i] * sentence[i])
+                res_per_sen.write(res_per_sen.size(), s.stack())
             res.write(res.size(), res_per_sen)
         return res.stack()
-
-    # def get_s(self, b, u):
-    #     e = [self.get_e(i, u) for i in b]
-    #     sum_e = sum([tf.exp(i) for i in e])
-    #     alpha = [tf.exp(i) / sum_e for i in e]
-    #     s = [v * alpha[idx] for idx, v in b]
-    #     return tf.reshape(s, (-1))
-
-    def get_s(self, sentence, u):
-        e = [self.get_e(word, u) for word in sentence]
-        sum_e = sum([tf.exp(i) for i in e])
-        alpha = [tf.exp(i) / sum_e for i in e]
-        s = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
-        for i in sentence.shape[0]:
-            s.write(s.size(), alpha[i] * sentence[i])
-        return s.stack()
-
-    def get_e(self, word, u):
-        word = tf.reshape(word, (-1, 1))
-        u = tf.reshape(u, (-1, 1))
-        wh = tf.matmul(self.wh, word)
-        wu = tf.matmul(self.wu, u)
-        tan = tf.tanh(wh + wu + self.bw)
-        return tf.matmul(tf.transpose(self.vw), tan)
 
     def compute_output_shape(self, input_shape):
         print(input_shape)
