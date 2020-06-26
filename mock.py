@@ -1,4 +1,3 @@
-from data import get_train_input, get_vocabulary
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import *
 from tensorflow.keras.utils import to_categorical
@@ -17,10 +16,10 @@ USER_VEC_DIM = 50
 PROD_VEC_DIM = 50
 SENTENCE_MEM_DIM = 50
 DOCUMENT_MEM_DIM = 50
-REPRESENTATIVES = 5
+REPRESENTATIVES = 2
 EPOCHS = 2
 BATCH_SIZE = 2
-MEMORY_UPDATE_CORE_UNITS = 1
+MEMORY_UPDATE_CORE_UNITS = 50
 
 
 def dot_product(a, b):
@@ -41,20 +40,21 @@ class ItemVectorTransform(Layer):
         self.units = units
 
     def update_memory(self, d_batch, u_batch):
-        res = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
-        for i in range(self.user_memory_vec.shape[0]):
-            m = tf.reshape(self.user_memory_vec[i], (-1, 1))
-            wuu = tf.matmul(u_batch, tf.transpose(self.wu))
-            wmm = tf.matmul(self.wm, m)
-            wdd = tf.matmul(d_batch, tf.transpose(self.wd))
-            wmm = tf.tile(tf.transpose(wmm), (u_batch.shape[0], 1))
-            bg = tf.tile(tf.transpose(self.bg), (u_batch.shape[0], 1))
-            g_batch = tf.math.sigmoid(wuu + wmm + wdd + bg)
-            m = tf.tile(tf.transpose(m), (u_batch.shape[0], 1))
-            nm = g_batch * m + (1 - g_batch) * u_batch
-            nm = tf.reduce_sum(nm, axis=0)
-            res = res.write(res.size(), nm)
-        self.user_memory_vec = res.stack()
+        for i in range(d_batch.shape[0]):
+            d = d_batch[i]
+            u = u_batch[i]
+            g = []
+            weighted_u = []
+            for i in self.user_memory_vec.shape[0]:
+                m = self.user_memory_vec[i]
+                wu = tf.matmul(self.wu, u)
+                wm = tf.matmul(self.wm, m)
+                wd = tf.matmul(self.wd, d)
+                s = tf.sigmoid(wu + wm + wd + self.bg)
+                g.append(s)
+                weighted_u.append((1 - s) * u)
+            g = tf.reshape(g, (-1, 1))
+            self.user_memory_vec = g * self.user_memory_vec + weighted_u
     
     def build(self, input_shape):
         self.wu = self.add_weight(
@@ -68,7 +68,7 @@ class ItemVectorTransform(Layer):
             trainable=True
         )
         self.wd = self.add_weight(
-            shape=(self.units, 4 * DOCUMENT_ENCODER_OUTPUT),
+            shape=(self.units, 2 * DOCUMENT_ENCODER_OUTPUT),
             initializer="random_normal",
             trainable=True
         )
@@ -219,41 +219,20 @@ def transform_id(item_vec, item_id):
 
 
 if __name__ == '__main__':
-    if os.path.exists('input'):
-        training_X, training_Y, training_user_id, training_product_id, max_word, max_sentence = pickle.load(open('input', 'rb'))
-    else:
-        training_X, training_Y, training_user_id, training_product_id, max_word, max_sentence = get_train_input(get_vocabulary())
-        pickle.dump((training_X, training_Y, training_user_id, training_product_id, max_word, max_sentence), open('input', 'wb'))
-    print('Start processing')
-    print('The max document length is %d' % (max_sentence))
-    print('The max sentence length is %d' % (max_word))
-    user_cnt = len(Counter(training_user_id))
-    product_cnt = len(Counter(training_product_id))
-    user_vector = np.array(np.random.rand(user_cnt, USER_VEC_DIM), dtype='float32')
-    product_vector = np.array(np.random.rand(product_cnt, USER_VEC_DIM), dtype='float32')
+    
 
-    UserVectorTransformer = ItemVectorTransform(user_vector[:REPRESENTATIVES])
-    ProVectorTransformer = ItemVectorTransform(product_vector[:REPRESENTATIVES])
-
-    # Prepare the input data
-    user_vector_input = transform_id(user_vector, training_user_id)
-    pro_vector_input = transform_id(product_vector, training_product_id)
-
-    doc_cnt = 100
-    X = training_X[:doc_cnt * max_sentence]
-    y = training_Y[:doc_cnt]
-    y = [i - 1 for i in y]
-    user_vector_input = user_vector_input[:doc_cnt]
-    pro_vector_input = pro_vector_input[:doc_cnt]
-
-    X = np.array(X)
-    X = np.reshape(X, (-1, max_word * max_sentence, WORD_DIM, 1))
+    max_word = 30
+    max_sentence = 50
+    X = np.array(np.random.rand(20, max_word * max_sentence, WORD_DIM), dtype=tf.float32)
+    user_vec_input = np.array(np.random.rand(20, USER_VEC_DIM), dtype=tf.float32)
+    pro_vector_input = np.array(np.random.rand(20, USER_VEC_DIM), dtype=tf.float32)
+    y = np.array([0, 1, 3, 4, 2, 1, 2, 4, 3, 2, 0, 1, 3, 4, 2, 1, 2, 4, 3, 2])
     n_cat = len(Counter(y))
-    y = np.array(y)
-
+    UserVectorTransformer = ItemVectorTransform(user_vec_input)
+    ProVectorTransformer = ItemVectorTransform(pro_vec_input)
     '''
     The size of the input is 
-    X: (None, max_word, max_sentence, WORD_DIM)
+    X: (None, max_word * max_sentence, WORD_DIM)
     y: (None,) of type int
     user_vector_input: (None, USER_VEC_DIM)
     pro_vector_input: (None, USER_VEC_DIM)
@@ -335,7 +314,7 @@ if __name__ == '__main__':
 
             x_batch = X[step*BATCH_SIZE:(step+1)*BATCH_SIZE]
             user_vec_batch = user_vector_input[step*BATCH_SIZE:(step+1)*BATCH_SIZE]
-            pro_vec_batch = pro_vector_input[step*BATCH_SIZE:(step+1)*BATCH_SIZE]
+            pro_vec_batch = pro_vec_input[step*BATCH_SIZE:(step+1)*BATCH_SIZE]
             y_batch = y[step*BATCH_SIZE:(step+1)*BATCH_SIZE]
 
             # batch_input = [x_batch, user_vec_batch, pro_vec_batch]
@@ -360,7 +339,7 @@ if __name__ == '__main__':
             ProVectorTransformer.update_memory(internal_pro_output, pro_vec_batch)
 
             # Log every 200 batches.
-            if step % 5 == 0:
+            if step % 1 == 0:
                 print(
                     "Training loss (for one batch) at step %d: %.4f"
                     % (step, float(loss_value))
