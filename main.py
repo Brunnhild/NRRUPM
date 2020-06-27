@@ -318,7 +318,7 @@ if __name__ == '__main__':
     pro_output = DocumentToOutput(max_sentence)(pro_final_input)
 
     final_con = concatenate([user_output, pro_output])
-    final_output = Dense(n_cat, activation='softmax')(final_con)
+    final_output = Dense(n_cat, activation='sigmoid')(final_con)
 
     model = Model([text_inputs, user_vec_input, pro_vec_input], final_output)
     get_document_output = Model([text_inputs, user_vec_input, pro_vec_input], [user_output, pro_output])
@@ -349,18 +349,18 @@ if __name__ == '__main__':
                 tape.watch(user_vec_batch)
                 tape.watch(pro_vec_batch)
                 # tape.watch(batch_input_images)
+                internal_user_output, internal_pro_output = get_document_output([x_batch, user_vec_batch, pro_vec_batch], training=False)
+                UserVectorTransformer.update_memory(internal_user_output, user_vec_batch)
+                ProVectorTransformer.update_memory(internal_pro_output, pro_vec_batch)
+
                 logits = model([x_batch, user_vec_batch, pro_vec_batch], training=True)
                 loss_value = loss_fn(y_batch, logits)
 
-            grads = tape.gradient(loss_value, model.trainable_weights)
-            optimizer.apply_gradients(zip(grads, model.trainable_weights))
-
-            internal_user_output, internal_pro_output = get_document_output([x_batch, user_vec_batch, pro_vec_batch], training=False)
-            UserVectorTransformer.update_memory(internal_user_output, user_vec_batch)
-            ProVectorTransformer.update_memory(internal_pro_output, pro_vec_batch)
+                grads = tape.gradient(loss_value, model.trainable_weights)
+                optimizer.apply_gradients(zip(grads, model.trainable_weights))
 
             # Log every 200 batches.
-            if step % 5 == 0:
+            if step % 1 == 0:
                 print(
                     "Training loss (for one batch) at step %d: %.4f"
                     % (step, float(loss_value))
