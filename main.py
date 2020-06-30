@@ -19,7 +19,7 @@ SENTENCE_MEM_DIM = 50
 DOCUMENT_MEM_DIM = 50
 REPRESENTATIVES = 10
 EPOCHS = 5
-BATCH_SIZE = 10
+BATCH_SIZE = 30
 MEMORY_UPDATE_CORE_UNITS = 1
 
 
@@ -223,11 +223,13 @@ def get_test_id(item_vec, item_id, item_map):
 if __name__ == '__main__':
     np.random.seed(0)
     tf.random.set_seed(0)
+    max_sentence = 40
+    max_word = 50
     if os.path.exists('input'):
-        training_X, training_Y, training_user_id, training_product_id, max_word, max_sentence = pickle.load(open('input', 'rb'))
+        training_X, training_Y, training_user_id, training_product_id = pickle.load(open('input', 'rb'))
     else:
-        training_X, training_Y, training_user_id, training_product_id, max_word, max_sentence = get_train_input(get_vocabulary())
-        pickle.dump((training_X, training_Y, training_user_id, training_product_id, max_word, max_sentence), open('input', 'wb'))
+        training_X, training_Y, training_user_id, training_product_id = get_train_input(get_vocabulary(), max_word, max_sentence)
+        pickle.dump((training_X, training_Y, training_user_id, training_product_id), open('input', 'wb'))
     if os.path.exists('test_input'):
         test_X, test_Y, test_user_id, test_product_id = pickle.load(open('test_input', 'rb'))
     else:
@@ -289,8 +291,8 @@ if __name__ == '__main__':
     c1 = concatenate([lstm_1, cnn_4], axis=2)
 
     # The input and transformation of the user vectors and the product vectors
-    user_vec_input = Input(shape=(USER_VEC_DIM))
-    pro_vec_input = Input(shape=(USER_VEC_DIM))
+    user_vec_input = Input(shape=(USER_VEC_DIM,))
+    pro_vec_input = Input(shape=(USER_VEC_DIM,))
     con_user_vec = UserVectorTransformer(user_vec_input)
     con_pro_vec = ProVectorTransformer(pro_vec_input)
 
@@ -359,10 +361,19 @@ if __name__ == '__main__':
             user_vec_batch = tf.convert_to_tensor(user_vec_batch, tf.float32)
             pro_vec_batch = tf.convert_to_tensor(pro_vec_batch, tf.float32)
 
-            if step % 10 == 0:
+            if step % 20 == 22:
                 test_cat = tf.constant([], dtype=tf.int64)
-                for i in range(len(test_X)):
-                    ll = model([tf.reshape(test_X[i], (1, max_sentence, max_word, WORD_DIM)), tf.reshape(test_user_id[i], (1, -1)), tf.reshape(test_product_id[i], (1, -1))], training=True)
+                num_of_bat = len(test_X) // BATCH_SIZE + 1
+                last_batch = len(test_X) - (len(test_X) // BATCH_SIZE) * BATCH_SIZE
+                if last_batch == 0:
+                    num_of_bat -= 1
+                for i in range(num_of_bat):
+                    bs = BATCH_SIZE
+                    if i == num_of_bat - 1 and last_batch != 0:
+                        bs = last_batch
+                    ll = model([tf.reshape(test_X[i*BATCH_SIZE:(i+1)*BATCH_SIZE], (bs, max_sentence, max_word, WORD_DIM)), 
+                                tf.reshape(test_user_id[i*BATCH_SIZE:(i+1)*BATCH_SIZE], (bs, -1)), 
+                                tf.reshape(test_product_id[i*BATCH_SIZE:(i+1)*BATCH_SIZE], (bs, -1))], training=False)
                     test_cat = tf.concat([test_cat, tf.argmax(ll, axis=1) + 1], axis=0)
                 me.reset_states()
                 _ = me.update_state(test_Y, test_cat)
