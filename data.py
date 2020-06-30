@@ -70,6 +70,7 @@ def get_sentence(stop_words, vocabulary):
         training_product_id.append(product_id)
         training_Y.append(int(score))
         comment_sentences = comment_str.split('<sssss>')
+        document = []
         for sentence in comment_sentences:
             sentence_matrix = []
             sentence_words = filter(lambda e: not filtering(e, stop_words), sentence.split(' '))
@@ -78,10 +79,47 @@ def get_sentence(stop_words, vocabulary):
                     sentence_matrix.append(vocabulary[word])
             for i in range(max_word - len(sentence_matrix)):
                 sentence_matrix.append(filling_word)
-            training_X.append(sentence_matrix)
+            document.append(sentence_matrix)
         for i in range(max_sentence - len(comment_sentences)):
-            training_X.append(filling_sentence)
+            document.append(filling_sentence)
+        training_X.append(document)
     return training_X, training_Y, training_user_id, training_product_id, max_word, max_sentence
+
+
+def do_get_test_input(stop_words, vocabulary, max_word, max_sentence):
+    file_path = "yelp-2013/yelp-2013-seg-20-20.test.ss"
+    file = open(file_path, encoding = "utf-8")
+
+    # 将每句话都构造成词向量矩阵
+    training_X = []
+    training_Y = []
+    training_user_id = []
+    training_product_id = []
+    filling_word = [float(0) for i in range(wordVec_dim)]
+    filling_sentence = [filling_word for i in range(max_word)]
+
+    file = open(file_path, encoding = "utf-8")
+
+    for i, line in enumerate(file):
+        user_id, product_id, score, comment_str = line.split('\t\t')
+        training_user_id.append(user_id)
+        training_product_id.append(product_id)
+        training_Y.append(int(score))
+        comment_sentences = comment_str.split('<sssss>')
+        document = []
+        for sentence in comment_sentences:
+            sentence_matrix = []
+            sentence_words = filter(lambda e: not filtering(e, stop_words), sentence.split(' '))
+            for word in list(sentence_words):
+                if vocabulary.__contains__(word):
+                    sentence_matrix.append(vocabulary[word])
+            for i in range(max_word - len(sentence_matrix)):
+                sentence_matrix.append(filling_word)
+            document.append(sentence_matrix)
+        for i in range(max_sentence - len(comment_sentences)):
+            document.append(filling_sentence)
+        training_X.append(document)
+    return training_X, training_Y, training_user_id, training_product_id
 
 
 def get_train_input(vocabulary):
@@ -91,3 +129,11 @@ def get_train_input(vocabulary):
     stop_words = [e for e in enumerate(stop_file)]
     training_X, training_Y, training_user_id, training_product_id, max_word, max_sentence = get_sentence(stop_words, vocabulary)
     return training_X, training_Y, training_user_id, training_product_id, max_word, max_sentence
+
+
+def get_test_input(vocabulary, max_word, max_sentence):
+    #获取停用词
+    stop_path = "./stop_words.txt"
+    stop_file = open(stop_path, encoding = "utf-8")
+    stop_words = [e for e in enumerate(stop_file)]
+    return do_get_test_input(stop_words, vocabulary, max_word, max_sentence)

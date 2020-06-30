@@ -1,4 +1,4 @@
-from data import get_train_input, get_vocabulary
+from data import get_train_input, get_vocabulary, get_test_input
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import *
 from tensorflow.keras.utils import to_categorical
@@ -17,14 +17,11 @@ USER_VEC_DIM = 50
 PROD_VEC_DIM = 50
 SENTENCE_MEM_DIM = 50
 DOCUMENT_MEM_DIM = 50
-REPRESENTATIVES = 5
-EPOCHS = 2
-BATCH_SIZE = 2
+REPRESENTATIVES = 10
+EPOCHS = 5
+BATCH_SIZE = 10
 MEMORY_UPDATE_CORE_UNITS = 1
 
-
-def dot_product(a, b):
-    return tf.reduce_sum(tf.multiply(a, b))
 
 '''
 Input: The user vector or product vector
@@ -43,17 +40,19 @@ class ItemVectorTransform(Layer):
     def update_memory(self, d_batch, u_batch):
         res = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
         for i in range(self.user_memory_vec.shape[0]):
-            m = tf.reshape(self.user_memory_vec[i], (-1, 1))
-            wuu = tf.matmul(u_batch, tf.transpose(self.wu))
-            wmm = tf.matmul(self.wm, m)
-            wdd = tf.matmul(d_batch, tf.transpose(self.wd))
-            wmm = tf.tile(tf.transpose(wmm), (u_batch.shape[0], 1))
-            bg = tf.tile(tf.transpose(self.bg), (u_batch.shape[0], 1))
-            g_batch = tf.math.sigmoid(wuu + wmm + wdd + bg)
-            m = tf.tile(tf.transpose(m), (u_batch.shape[0], 1))
-            nm = g_batch * m + (1 - g_batch) * u_batch
-            nm = tf.reduce_sum(nm, axis=0)
-            res = res.write(res.size(), nm)
+            m = tf.reshape(self.user_memory_vec[i], (-1, 1)) # shape: (USER_VEC_DIM, 1)
+            wuu = tf.matmul(u_batch, tf.transpose(self.wu)) # shape: (batch, units)
+            wmm = tf.matmul(self.wm, m) # shape: (units, 1)
+            wdd = tf.matmul(d_batch, tf.transpose(self.wd)) # shape: (batch, units)
+            wmm = tf.tile(tf.transpose(wmm), (u_batch.shape[0], 1)) # shape: (batch, units)
+            bg = tf.tile(tf.transpose(self.bg), (u_batch.shape[0], 1)) #shape: (batch, units)
+            g_batch = tf.math.sigmoid(wuu + wmm + wdd + bg) # shape: (batch, units)
+            g_batch = tf.reshape(g_batch, (-1,))
+            m = tf.reshape(m, (-1,))
+            for i in range(g_batch.shape[0]):
+                g = g_batch[i]
+                m = g * m + (1 - g) * u_batch[i]
+            res = res.write(res.size(), m)
         self.user_memory_vec = res.stack()
     
     def build(self, input_shape):
@@ -83,15 +82,11 @@ class ItemVectorTransform(Layer):
         res = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
         for u in inputs:
             mu = tf.matmul(self.user_memory_vec, tf.reshape(u, (-1, 1))) # shape: (rep, 1)
-            gammar = tf.exp(mu) / tf.reduce_sum(tf.exp(mu)) # shape: (rep, 1)
+            gammar = tf.nn.softmax(mu, axis=0) # shape: (rep, 1)
             gammar = tf.tile(gammar, (1, u.shape[0])) # shape: (rep, USER_VEC_DIM)
             gm = gammar * self.user_memory_vec
             u_ = tf.reduce_sum(gm, axis=0)
             res = res.write(res.size(), tf.concat([u, u_], axis=0))
-            # sum_r = sum([tf.exp(dot_product(self.user_memory_vec[i], u)) for i in range(self.user_memory_vec.shape[0])])
-            # r = [tf.exp(dot_product(self.user_memory_vec[i], u)) for i in range(self.user_memory_vec.shape[0])]
-            # u_ = sum([r[i] * self.user_memory_vec[i] for i in range(self.user_memory_vec.shape[0])])
-            # res.write(res.size(), tf.concat([u, tf.transpose(u_)], axis=-1))
         return res.stack()
 
     def compute_output_shape(self, input_shape):
@@ -133,7 +128,7 @@ class SentenceToDocument(Layer):
     def call(self, inputs):
         res = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
         for con_input in inputs:
-            sentence_output = con_input[:-1] 
+            sentence_output = con_input[:-1]
             section_size = sentence_output.shape[0] // self.sentence_number
             user_vec = con_input[-1] # shape: (USER_VEC_DIM,)
             wpu = tf.matmul(self.wu, tf.reshape(user_vec, (-1, 1)))
@@ -145,7 +140,7 @@ class SentenceToDocument(Layer):
                 wph = tf.matmul(h, tf.transpose(self.wh)) # shape: (section_size, units)
                 tanh = tf.tanh(wph + wub)
                 e = tf.matmul(tanh, self.vw) # shape: (section_size, 1)
-                alpha = tf.exp(e) / tf.reduce_sum(tf.exp(e)) # shape: (section_size, 1)
+                alpha = tf.nn.softmax(e, axis=0) # shape: (section_size, 1)
                 s = tf.tile(alpha, (1, h.shape[1])) * h # shape: (section_size, 2 * MIDDLE_OUTPUT)
                 s = tf.reduce_sum(s, axis=0) #shape: (2 * MIDDLE_OUTPUT,)
                 section_s = section_s.write(i, s)
@@ -199,14 +194,14 @@ class DocumentToOutput(Layer):
             wub = tf.tile(wub, (self.sentence_number, 1)) # shape: (self.sentence_number, units)
             tanh = tf.tanh(wph + wub)
             e = tf.matmul(tanh, self.vs) # shape: (self.sentence_number, 1)
-            beta = tf.exp(e) / tf.reduce_sum(tf.exp(e)) # shape: (self.sentence_number, 1)
+            beta = tf.nn.softmax(e, axis=0) # shape: (self.sentence_number, 1)
             d = tf.tile(beta, (1, document_output.shape[1])) * document_output # shape: (self.sentence_number, 2 * MIDDLE_OUTPUT)
             d = tf.reduce_sum(d, axis=0)
             res = res.write(res.size(), d)
         return res.stack()
 
-def transform_id(item_vec, item_id):
-    item_map = dict()
+
+def transform_id(item_vec, item_id, item_map):
     item_vector_input, idx = [], 0
     for i in item_id:
         if item_map.__contains__(i):
@@ -218,12 +213,26 @@ def transform_id(item_vec, item_id):
     return np.reshape(item_vector_input, (-1, USER_VEC_DIM))
 
 
+def get_test_id(item_vec, item_id, item_map):
+    item_vector_input = []
+    for i in item_id:
+        item_vector_input.append(item_vec[item_map[i]])
+    return np.reshape(item_vector_input, (-1, USER_VEC_DIM))
+
+
 if __name__ == '__main__':
+    np.random.seed(0)
+    tf.random.set_seed(0)
     if os.path.exists('input'):
         training_X, training_Y, training_user_id, training_product_id, max_word, max_sentence = pickle.load(open('input', 'rb'))
     else:
         training_X, training_Y, training_user_id, training_product_id, max_word, max_sentence = get_train_input(get_vocabulary())
         pickle.dump((training_X, training_Y, training_user_id, training_product_id, max_word, max_sentence), open('input', 'wb'))
+    if os.path.exists('test_input'):
+        test_X, test_Y, test_user_id, test_product_id = pickle.load(open('test_input', 'rb'))
+    else:
+        test_X, test_Y, test_user_id, test_product_id = get_test_input(get_vocabulary(), max_word, max_sentence)
+        pickle.dump((test_X, test_Y, test_user_id, test_product_id), open('test_input', 'wb'))
     print('Start processing')
     print('The max document length is %d' % (max_sentence))
     print('The max sentence length is %d' % (max_word))
@@ -236,18 +245,22 @@ if __name__ == '__main__':
     ProVectorTransformer = ItemVectorTransform(product_vector[:REPRESENTATIVES])
 
     # Prepare the input data
-    user_vector_input = transform_id(user_vector, training_user_id)
-    pro_vector_input = transform_id(product_vector, training_product_id)
+    user_id_mapper = dict()
+    pro_id_mapper = dict()
+    user_vector_input = transform_id(user_vector, training_user_id, user_id_mapper)
+    pro_vector_input = transform_id(product_vector, training_product_id, pro_id_mapper)
+    test_user_id = get_test_id(user_vector, test_user_id, user_id_mapper)
+    test_product_id = get_test_id(product_vector, test_product_id, pro_id_mapper)
 
-    doc_cnt = 100
-    X = training_X[:doc_cnt * max_sentence]
+    doc_cnt = len(training_X)
+    X = training_X[:doc_cnt]
     y = training_Y[:doc_cnt]
     y = [i - 1 for i in y]
     user_vector_input = user_vector_input[:doc_cnt]
     pro_vector_input = pro_vector_input[:doc_cnt]
 
-    X = np.array(X)
-    X = np.reshape(X, (-1, max_word * max_sentence, WORD_DIM, 1))
+    # X = np.array(X)
+    # X = np.reshape(X, (-1, max_word * max_sentence, WORD_DIM, 1))
     n_cat = len(Counter(y))
     y = np.array(y)
 
@@ -262,11 +275,12 @@ if __name__ == '__main__':
     # y = to_categorical(y)
 
     # The sentence encoder
-    text_inputs = Input(shape=(max_word * max_sentence, WORD_DIM))
-    mask_input = Masking(0)(text_inputs)
+    text_inputs = Input(shape=(max_sentence, max_word, WORD_DIM))
+    lstm_input = Reshape((max_word * max_sentence, WORD_DIM))(text_inputs)
+    mask_input = Masking(0)(lstm_input)
     lstm_1 = Bidirectional(LSTM(MIDDLE_OUTPUT // 2, return_sequences=True))(mask_input)
 
-    cnn_input = Reshape((max_word * max_sentence, WORD_DIM, 1))(mask_input)
+    cnn_input = Reshape((max_word * max_sentence, WORD_DIM, 1))(text_inputs)
     cnn_1 = Conv2D(1, (5, 3), padding='same', activation='relu', strides=1)(cnn_input)
     cnn_2 = Dropout(0.5)(cnn_1)
     cnn_3 = MaxPooling2D(pool_size=(1, 4))(cnn_2)
@@ -287,8 +301,8 @@ if __name__ == '__main__':
     pro_sentence_input = tf.concat([c1, fur_pro_vec], axis=1)
     # The output of the whole first layer of both sides
     # The dimension now is (None, sentence_number, 2 * MIDDLE_OUTPUT)
-    user_sentence_output = SentenceToDocument(max_sentence)(fur_user_vec)
-    pro_sentence_output = SentenceToDocument(max_sentence)(fur_pro_vec)
+    user_sentence_output = SentenceToDocument(max_sentence)(user_sentence_input)
+    pro_sentence_output = SentenceToDocument(max_sentence)(pro_sentence_input)
 
     # The document encoder
     lstm_user_input = Reshape((max_sentence, 2 * MIDDLE_OUTPUT))(user_sentence_output)
@@ -318,51 +332,76 @@ if __name__ == '__main__':
     pro_output = DocumentToOutput(max_sentence)(pro_final_input)
 
     final_con = concatenate([user_output, pro_output])
-    final_output = Dense(n_cat, activation='sigmoid')(final_con)
+    final_output = Dense(n_cat, activation='softmax')(final_con)
 
+    # examine_model = Model([text_inputs, user_vec_input, pro_vec_input], cnn_user_output)
     model = Model([text_inputs, user_vec_input, pro_vec_input], final_output)
     get_document_output = Model([text_inputs, user_vec_input, pro_vec_input], [user_output, pro_output])
 
     # Instantiate an optimizer.
     optimizer = keras.optimizers.Adam()
     # Instantiate a loss function.
-    loss_fn = keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+    loss_fn = keras.losses.SparseCategoricalCrossentropy(from_logits=False)
+
+    me = keras.metrics.Accuracy()
 
     for epoch in range(EPOCHS):
         print('Start of epoch %d' % (epoch))
 
-        for step in range(X.shape[0] // BATCH_SIZE):
+        for step in range(len(X) // BATCH_SIZE):
 
             x_batch = X[step*BATCH_SIZE:(step+1)*BATCH_SIZE]
             user_vec_batch = user_vector_input[step*BATCH_SIZE:(step+1)*BATCH_SIZE]
             pro_vec_batch = pro_vector_input[step*BATCH_SIZE:(step+1)*BATCH_SIZE]
             y_batch = y[step*BATCH_SIZE:(step+1)*BATCH_SIZE]
 
-            # batch_input = [x_batch, user_vec_batch, pro_vec_batch]
-            # batch_input_images = tf.convert_to_tensor(batch_input, tf.float32)
-
             x_batch = tf.convert_to_tensor(x_batch, tf.float32)
             user_vec_batch = tf.convert_to_tensor(user_vec_batch, tf.float32)
             pro_vec_batch = tf.convert_to_tensor(pro_vec_batch, tf.float32)
+
+            if step % 10 == 0:
+                test_cat = tf.constant([], dtype=tf.int64)
+                for i in range(len(test_X)):
+                    ll = model([tf.reshape(test_X[i], (1, max_sentence, max_word, WORD_DIM)), tf.reshape(test_user_id[i], (1, -1)), tf.reshape(test_product_id[i], (1, -1))], training=True)
+                    test_cat = tf.concat([test_cat, tf.argmax(ll, axis=1) + 1], axis=0)
+                me.reset_states()
+                _ = me.update_state(test_Y, test_cat)
+                test_acc = me.result().numpy()
+                print('The test acc: %.2f' % (test_acc))
+                f = open('epoch-%d-step-%d-acc-%.2f' % (epoch, step, test_acc), 'w')
+                f.write(str(test_cat.numpy()))
+                f.close()
+
             with tf.GradientTape() as tape:
                 tape.watch(x_batch)
                 tape.watch(user_vec_batch)
                 tape.watch(pro_vec_batch)
-                # tape.watch(batch_input_images)
+                # exa = examine_model([x_batch, user_vec_batch, pro_vec_batch], training=False)
                 internal_user_output, internal_pro_output = get_document_output([x_batch, user_vec_batch, pro_vec_batch], training=False)
                 UserVectorTransformer.update_memory(internal_user_output, user_vec_batch)
                 ProVectorTransformer.update_memory(internal_pro_output, pro_vec_batch)
 
                 logits = model([x_batch, user_vec_batch, pro_vec_batch], training=True)
+                me.reset_states()
+                _ = me.update_state(y_batch, tf.argmax(logits, axis=1))
+                acc = me.result().numpy()
                 loss_value = loss_fn(y_batch, logits)
 
                 grads = tape.gradient(loss_value, model.trainable_weights)
-                optimizer.apply_gradients(zip(grads, model.trainable_weights))
 
-            # Log every 200 batches.
+            # test_cat = []
+            # for i in range(len(test_X)):
+            #     ll = model([test_X[i], test_user_id[i], test_product_id[i]], training=True)
+            #     tf.print(ll)
+            #     test_cat.append(tf.argmax(ll))
+            # me.reset_states()
+            # test_acc = me.update_state(test_Y, test_cat)
+
+            optimizer.apply_gradients(zip(grads, model.trainable_weights))
+
             if step % 1 == 0:
                 print(
-                    "Training loss (for one batch) at step %d: %.4f"
-                    % (step, float(loss_value))
+                    "Training loss (for one batch) at step %d: %.4f and the accuracy is: %.2f"
+                    % (step, float(loss_value), acc)
                 )
                 print("Seen so far: %s samples" % ((step + 1) * BATCH_SIZE))

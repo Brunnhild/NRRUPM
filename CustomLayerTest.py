@@ -2,9 +2,8 @@ from tensorflow import keras
 import tensorflow as tf
 import numpy as np
 
-a = tf.constant([
-    [1, 2, 3],
-    [2, 3, 4]
-])
-
-print(tf.reduce_sum(a, axis=0))
+print(tf.argmax(tf.constant([1, 2, 1])) + 1)
+dd = tf.constant([1, 1, 1]).numpy()
+f = open('333', 'w')
+f.write(str(dd))
+f.close()
